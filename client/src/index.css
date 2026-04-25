@@ -10,6 +10,14 @@
   --border: rgba(255, 255, 255, 0.1);
   --glass-bg: rgba(15, 23, 42, 0.6);
   --glass-border: rgba(255, 255, 255, 0.08);
+
+  --tone-1: linear-gradient(135deg, #312e81 0%, #1e1b4b 50%, #0f172a 100%);
+  --tone-2: linear-gradient(135deg, #7c2d12 0%, #92400e 50%, #451a03 100%);
+  --tone-3: linear-gradient(135deg, #064e3b 0%, #065f46 50%, #022c22 100%);
+  --tone-4: linear-gradient(135deg, #4a044e 0%, #701a75 50%, #2d0036 100%);
+  --tone-5: linear-gradient(135deg, #1e3a5f 0%, #1e40af 50%, #0c1a33 100%);
+  --tone-6: linear-gradient(135deg, #3f1a1a 0%, #7f1d1d 50%, #1c0707 100%);
+
   font-family: 'Plus Jakarta Sans', sans-serif;
   color: var(--text);
   background: var(--bg);
@@ -38,3 +46,9 @@ h1, h2, h3, h4 {
   font-weight: 600;
   letter-spacing: -0.02em;
 }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 10px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.25); }
+

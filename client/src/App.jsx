@@ -7,6 +7,8 @@ import Messages from './pages/Messages';
 import Planner from './pages/Planner';
 import Reels from './pages/Reels';
 import Search from './pages/Search';
+import Explore from './pages/Explore';
+import Notifications from './pages/Notifications';
 import './App.css';
 
 function App() {
@@ -19,11 +21,11 @@ function App() {
             <Route path="home" element={<Home />} />
             <Route path="planner" element={<Planner />} />
             <Route path="search" element={<Search />} />
-            <Route path="explore" element={<div className="status-panel"><h2>Explore Page</h2><p>Explore dedicated page</p></div>} />
+            <Route path="explore" element={<Explore />} />
             <Route path="reels" element={<Reels />} />
             <Route path="messages" element={<Messages />} />
-            <Route path="notifications" element={<div className="status-panel"><h2>Notifications Page</h2><p>Notifications dedicated page</p></div>} />
-            <Route path="profile" element={<div className="status-panel"><h2>Profile Page</h2><p>Profile dedicated page</p></div>} />
+            <Route path="notifications" element={<Notifications />} />
+            <Route path="profile" element={<div className="status-panel" style={{ textAlign: 'center', padding: '3rem' }}><p style={{ fontSize: '3rem' }}>👤</p><h2>Profile</h2><p style={{ color: '#94a3b8' }}>Profile page coming soon.</p></div>} />
             <Route path="*" element={<Navigate to="/home" replace />} />
           </Route>
         </Routes>

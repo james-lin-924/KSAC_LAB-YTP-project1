@@ -3,6 +3,7 @@ const cors = require('cors');
 const dotenv = require('dotenv');
 const fs = require('node:fs/promises');
 const path = require('node:path');
+const iconv = require('iconv-lite');
 
 dotenv.config();
 
@@ -19,6 +20,18 @@ const datasetFiles = {
   hostel: '臺北市民宿名冊.csv',
   busStops: '8_站牌.csv',
   touristService: '臺北市旅遊服務中心服務據點資訊1140919.csv',
+};
+
+// Map files to their probable encodings
+const fileEncodings = {
+  'Scenic_Spot_C_f.csv': 'utf8',
+  '臺北市一般旅館名冊.csv': 'big5',
+  '臺北市民宿名冊.csv': 'big5',
+  '8_站牌.csv': 'utf8',
+  '臺北市旅遊服務中心服務據點資訊1140919.csv': 'big5',
+  '臺北市借問站據點資訊1140919.csv': 'big5',
+  '臺北市臺北旅遊網住宿資料(中文).csv': 'big5',
+  '附件2-臺北旅遊網景點資料中文(更1140715 (1).csv': 'big5',
 };
 
 app.use(cors());
@@ -54,8 +67,12 @@ function parseCsvLine(line) {
 
 async function readCsvRecords(fileName, limit = 10) {
   const filePath = path.join(datasetDir, fileName);
-  const content = await fs.readFile(filePath, 'utf8');
-  const lines = content.split(/\r?\n/).filter(Boolean);
+  const buffer = await fs.readFile(filePath);
+  const encoding = fileEncodings[fileName] || 'utf8';
+  const content = iconv.decode(buffer, encoding);
+  
+  // Clean up BOM if present
+  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
 
   if (lines.length === 0) {
     return [];
@@ -74,8 +91,10 @@ async function readCsvRecords(fileName, limit = 10) {
 
 async function getFileLineCount(fileName) {
   const filePath = path.join(datasetDir, fileName);
-  const content = await fs.readFile(filePath, 'utf8');
-  const rows = content.split(/\r?\n/).filter(Boolean);
+  const buffer = await fs.readFile(filePath);
+  const encoding = fileEncodings[fileName] || 'utf8';
+  const content = iconv.decode(buffer, encoding);
+  const rows = content.replace(/^\uFEFF/, '').split(/\r?\n/).filter(Boolean);
   return Math.max(rows.length - 1, 0);
 }
 
@@ -128,18 +147,36 @@ app.get('/api/datasets/overview', async (_req, res) => {
   }
 });
 
+// Map numeric Class1 codes from Scenic_Spot_C_f.csv to human-readable Chinese labels
+const CATEGORY_LABELS = {
+  '1': '觀光工廠', '2': '歷史建築', '3': '古蹟', '4': '博物館', '5': '藝文空間',
+  '6': '自然景觀', '7': '主題公園', '8': '夜市', '9': '購物', '10': '宗教場所',
+  '11': '溫泉', '12': '海洋休閒', '13': '登山步道', '14': '文創園區', '15': '農場體驗',
+};
+
+function mapCategory(raw) {
+  if (!raw) return '旅遊景點';
+  return CATEGORY_LABELS[raw.trim()] || raw.trim() || '旅遊景點';
+}
+
 app.get('/api/spots', async (req, res) => {
-  const limit = Math.max(1, Math.min(20, Number(req.query.limit) || 8));
+  const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 8));
 
   try {
     const rows = await readCsvRecords(datasetFiles.scenic, limit);
-    const normalized = rows.map((row, index) => ({
-      id: index + 1,
-      name: row.stitle || row.name || row.名稱 || 'Unknown Spot',
-      category: row.CAT1 || row.CAT2 || row.類別 || 'Travel',
-      location: row.address || row.地址 || row.district || 'Taipei',
-      description: row.xbody || row.description || row.簡介 || 'No description available.',
-    }));
+    const normalized = rows
+      .filter(row => (row.Name || row.stitle || row.名稱) && (row.Zone === '' || row.Zone || true))
+      .map((row, index) => ({
+        id: index + 1,
+        name: (row.Name || row.stitle || row.名稱 || row.旅館名稱 || row.景點名稱 || '').trim(),
+        category: mapCategory(row.Class1 || row.CAT1 || row.CAT2 || row.類別 || row.Orgclass),
+        location: (row.Add || row.address || row.地址 || row.營業地址 || row.Town || 'Taipei').trim(),
+        description: (row.Description || row.xbody || row.簡介 || row.Toldescribe || '').trim(),
+        lat: parseFloat(row.Py || row.lat || 0),
+        lng: parseFloat(row.Px || row.lng || 0),
+        website: row.Website || '',
+      }))
+      .filter(s => s.name); // remove any rows without a name
 
     res.json({ spots: normalized });
   } catch (error) {
@@ -307,6 +344,125 @@ app.get('/api/check-hotel', async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ error: `Failed to check accommodation: ${error.message}` });
+  }
+});
+
+// ── SerpAPI Search endpoints ────────────────────────────────────────────────
+const SERP_API_KEY = process.env.SERP_API_KEY;
+const SERP_BASE = 'https://serpapi.com/search.json';
+
+// Server-side image cache: spotName → thumbnail URL
+const imageCache = new Map();
+
+async function fetchSingleImage(spotName) {
+  if (imageCache.has(spotName)) return imageCache.get(spotName);
+  if (!SERP_API_KEY) return null;
+  try {
+    const url = new URL(SERP_BASE);
+    url.searchParams.set('engine', 'google_images');
+    url.searchParams.set('q', `${spotName} Taipei 景點`);
+    url.searchParams.set('num', '3');
+    url.searchParams.set('gl', 'tw');
+    url.searchParams.set('api_key', SERP_API_KEY);
+    const resp = await fetch(url.toString());
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const first = (data.images_results || []).find(r => r.thumbnail);
+    const imgUrl = first?.thumbnail || null;
+    imageCache.set(spotName, imgUrl);
+    return imgUrl;
+  } catch {
+    return null;
+  }
+}
+
+// Batch-fetch images for multiple spot names (comma-separated in ?names=)
+app.get('/api/spots/images', async (req, res) => {
+  const names = (req.query.names || '').split(',').map(n => n.trim()).filter(Boolean);
+  if (!names.length) return res.status(400).json({ error: 'Missing "names" parameter' });
+
+  // Cap at 20 to avoid overwhelming the API
+  const batch = names.slice(0, 20);
+
+  // Fetch in parallel (but throttle to 5 concurrent to be polite)
+  const results = {};
+  const chunks = [];
+  for (let i = 0; i < batch.length; i += 5) chunks.push(batch.slice(i, i + 5));
+
+  for (const chunk of chunks) {
+    const fetched = await Promise.all(chunk.map(async name => {
+      const url = await fetchSingleImage(name);
+      return [name, url];
+    }));
+    fetched.forEach(([name, url]) => { if (url) results[name] = url; });
+  }
+
+  res.json({ images: results });
+});
+
+app.get('/api/search/text', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.status(400).json({ error: 'Missing query parameter "q"' });
+
+  if (!SERP_API_KEY) return res.status(503).json({ error: 'SerpAPI key not configured' });
+
+  try {
+    const url = new URL(SERP_BASE);
+    url.searchParams.set('engine', 'google');
+    url.searchParams.set('q', `${q} Taipei travel`);
+    url.searchParams.set('hl', 'en');
+    url.searchParams.set('gl', 'tw');
+    url.searchParams.set('num', '10');
+    url.searchParams.set('api_key', SERP_API_KEY);
+
+    const response = await fetch(url.toString());
+    if (!response.ok) throw new Error(`SerpAPI returned ${response.status}`);
+    const data = await response.json();
+
+    const results = (data.organic_results || []).map(r => ({
+      title: r.title || '',
+      snippet: r.snippet || '',
+      link: r.link || '',
+      displayed_link: r.displayed_link || '',
+      favicon: r.favicon || '',
+    }));
+
+    res.json({ results, query: q, total: results.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/search/images', async (req, res) => {
+  const q = (req.query.q || '').trim();
+  if (!q) return res.status(400).json({ error: 'Missing query parameter "q"' });
+
+  if (!SERP_API_KEY) return res.status(503).json({ error: 'SerpAPI key not configured' });
+
+  try {
+    const url = new URL(SERP_BASE);
+    url.searchParams.set('engine', 'google_images');
+    url.searchParams.set('q', `${q} Taipei`);
+    url.searchParams.set('hl', 'en');
+    url.searchParams.set('gl', 'tw');
+    url.searchParams.set('num', '20');
+    url.searchParams.set('api_key', SERP_API_KEY);
+
+    const response = await fetch(url.toString());
+    if (!response.ok) throw new Error(`SerpAPI returned ${response.status}`);
+    const data = await response.json();
+
+    const images = (data.images_results || []).map(r => ({
+      title: r.title || '',
+      original: r.original || '',
+      thumbnail: r.thumbnail || '',
+      source: r.source || '',
+      link: r.link || '',
+    })).filter(r => r.thumbnail);
+
+    res.json({ images, query: q, total: images.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
 
